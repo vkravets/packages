@@ -1,4 +1,4 @@
-BOARD ?= rpi4
+BOARD ?= rpi2
 ARCH ?= arm
 
 # =====
@@ -7,11 +7,14 @@ _REPO_KEY ?= 912C773ABBD1B584
 _REPO_DEST ?= root@pikvm.org:/var/www/
 _PIBUILDER_REPO ?= https://github.com/pikvm/pi-builder
 
+_ALARM_UID := $(shell id -u)
+_ALARM_GID := $(shell id -g)
 _BUILDENV_IMAGE = pikvm/packages-buildenv-$(BOARD)-$(ARCH)
 _BUILDENV_DIR = ./.pi-builder/$(BOARD)-$(ARCH)
 _BUILD_DIR = ./.build/$(BOARD)-$(ARCH)
 _REPO_DIR = ./repos/$(BOARD)-$(ARCH)
 _CACHE_DIR = ./.cache/$(BOARD)-$(ARCH)
+_MAKE_J = 12
 
 _UPDATABLE_PACKAGES := $(sort $(subst /update.mk,,$(subst packages/,,$(wildcard packages/*/update.mk))))
 _KNOWN_BOARDS := $(sort $(subst order.$(ARCH)., ,$(wildcard packages/order.$(ARCH).*)))
@@ -69,12 +72,17 @@ all:
 
 
 upload:
-	rsync -rl --progress --delete repos $(_REPO_DEST)
+	rsync -rl --progress --delete $(_BASE_REPOS_DIR)/ root@files.pikvm.org:/var/www/files.pikvm.org/repos/arch
+
+
+download:
+	rm -rf $(_BASE_REPOS_DIR)
+	rsync -rl --progress root@files.pikvm.org:/var/www/files.pikvm.org/repos/arch/ $(_BASE_REPOS_DIR)
 
 
 define make_update_package_target
 update-$1:
-	make -C packages/$1 -f update.mk update BOARD=$(BOARD) ARCH=$(ARCH)
+	$(MAKE) -C packages/$1 -f update.mk update BOARD=$(BOARD) ARCH=$(ARCH)
 endef
 $(foreach pkg,$(_UPDATABLE_PACKAGES),$(eval $(call make_update_package_target,$(pkg))))
 update: $(addprefix update-,$(_UPDATABLE_PACKAGES))
@@ -82,47 +90,57 @@ update: $(addprefix update-,$(_UPDATABLE_PACKAGES))
 
 define make_board_target
 packages-$1:
-	make binfmt BOARD=$1
+	$(MAKE) binfmt BOARD=$1
 	for pkg in `cat packages/order.$(ARCH).$1`; do \
-		make build BOARD=$1 PKG=$$$$pkg || exit 1; \
+		$(MAKE) _build BOARD=$1 PKG=$$$$pkg NOINT=$$$$NOINT J=$$$$J || exit 1; \
 	done
 buildenv-$1:
-	make buildenv BOARD=$1 NC=$$(NC)
+	$(MAKE) buildenv BOARD=$1 NC=$$(NC)
 pushenv-$1:
-	make pushenv BOARD=$1
+	$(MAKE) pushenv BOARD=$1
 pullenv-$1:
-	make pullenv BOARD=$1
+	$(MAKE) pullenv BOARD=$1
 endef
 $(foreach board,$(_KNOWN_BOARDS),$(eval $(call make_board_target,$(board))))
 
 
-build:
+_build:
 	$(call say,"Ensuring package $(PKG) for $(BOARD)")
 	rm -rf $(_BUILD_DIR)
-	make _run BOARD=$(BOARD) CMD="/tools/buildpkg $(PKG) '$(call optbool,$(FORCE))' '$(call optbool,$(NOREPO))'"
+	$(MAKE) _run \
+		_MAKE_J=$(if $(J),$(J),$(_MAKE_J)) \
+		BOARD=$(BOARD) \
+		OPTS="--tty $(if $(call optbool,$(NOINT)),,--interactive)" \
+		CMD="/tools/buildpkg $(PKG) '$(call optbool,$(FORCE))' '$(call optbool,$(NOREPO))'"
 	$(call say,"Complete package $(PKG) for $(BOARD)")
 
 
 shell:
-	make _run BOARD=$(BOARD) CMD=/bin/bash OPTS=-i
+	$(MAKE) _run \
+		_MAKE_J=$(if $(J),$(J),$(_MAKE_J)) \
+		BOARD=$(BOARD) \
+		OPTS="--tty --interactive" \
+		CMD=/bin/bash
 
 
-binfmt:
-	make -C $(_BUILDENV_DIR) binfmt
+binfmt: buildenv
+	$(MAKE) -C $(_BUILDENV_DIR) binfmt
 
 
 buildenv: $(_BUILDENV_DIR)
 	$(call say,"Ensuring $(BOARD)-$(ARCH) buildenv")
-	make -C $(_BUILDENV_DIR) binfmt
+	$(MAKE) -C $(_BUILDENV_DIR) binfmt
 	rm -rf $(_BUILDENV_DIR)/stages/buildenv
 	cp -a buildenv $(_BUILDENV_DIR)/stages/buildenv
-	make -C $(_BUILDENV_DIR) os \
+	$(MAKE) -C $(_BUILDENV_DIR) os \
 		NC=$(NC) \
 		PASS_ENSURE_TOOLBOX=1 \
 		PASS_ENSURE_BINFMT=1 \
 		BUILD_OPTS=" \
 			--build-arg REPO_NAME=$(_REPO_NAME) \
 			--build-arg REPO_KEY=$(_REPO_KEY) \
+			--build-arg ALARM_UID=$(_ALARM_UID) \
+			--build-arg ALARM_GID=$(_ALARM_GID) \
 			--tag $(_BUILDENV_IMAGE) \
 		" \
 		PROJECT=pikvm-packages \
@@ -156,9 +174,10 @@ _run: $(_BUILD_DIR) $(_REPO_DIR)
 			--env REPO_DIR=/repo \
 			--env BUILD_DIR=/build \
 			--env PACKAGES_DIR=/packages \
-			--env CCACHE_DIR=/cache \
+			--env MAKE_J=$(_MAKE_J) \
+            --env CCACHE_DIR=/cache \
 			--volume $$HOME/.gnupg/:/home/alarm/.gnupg/:rw \
-			--volume /run/user/1000/gnupg:/run/user/1000/gnupg:rw \
+			--volume /run/user/$(_ALARM_UID)/gnupg:/run/user/$(_ALARM_UID)/gnupg:rw \
 			$(OPTS) \
 		$(_BUILDENV_IMAGE) \
 		$(if $(CMD),$(CMD),/bin/bash)
@@ -172,11 +191,20 @@ $(_BUILD_DIR):
 	mkdir -p $(_BUILD_DIR)
 
 
-$(_REPO_DIR):
-	mkdir -p $(_REPO_DIR)
-	[ $(ARCH) != arm ] || (cd `dirname $(_REPO_DIR)` && ln -sf $(BOARD)-arm $(BOARD))
-	[ $(BOARD) != rpi ] || (cd `dirname $(_REPO_DIR)` && ln -sf rpi zerow && ln -sf rpi-$(ARCH) zerow-$(ARCH))
-	[ $(BOARD) != rpi2 ] || (cd `dirname $(_REPO_DIR)` && ln -sf rpi2 rpi3 && ln -sf rpi2-$(ARCH) rpi3-$(ARCH))
+$(_BASE_REPOS_DIR)/rpi:
+	mkdir -p $(_BASE_REPOS_DIR)/rpi
+	ln -sf rpi $(_BASE_REPOS_DIR)/zerow
+	ln -sf rpi $(_BASE_REPOS_DIR)/rpi-arm
+
+
+$(_BASE_REPOS_DIR)/rpi2:
+	mkdir -p $(_BASE_REPOS_DIR)/rpi2
+	ln -sf rpi2 $(_BASE_REPOS_DIR)/zero2w
+	ln -sf rpi2 $(_BASE_REPOS_DIR)/rpi3
+	ln -sf rpi2 $(_BASE_REPOS_DIR)/rpi2-arm
+	ln -sf rpi2 $(_BASE_REPOS_DIR)/rpi3-arm
+	ln -sf rpi2 $(_BASE_REPOS_DIR)/rpi4
+	ln -sf rpi2 $(_BASE_REPOS_DIR)/rpi4-arm
 
 $(_CACHE_DIR):
 	mkdir -p $(_CACHE_DIR)

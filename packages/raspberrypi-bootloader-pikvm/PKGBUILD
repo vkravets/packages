@@ -4,31 +4,37 @@
 buildarch=28
 
 pkgbase=raspberrypi-bootloader
-pkgname=('raspberrypi-bootloader'
-         'raspberrypi-bootloader-x')
-pkgver=20201214
-pkgrel=3
-_commit=919aee0ed75f7db48a38b8b96c13228a7584cfd7
+pkgname=('raspberrypi-bootloader-pikvm'
+         'raspberrypi-bootloader-x-pikvm')
+pkgver=20211102
+pkgrel=1
+_commit=27f12ea332fa4d94b963f8e0f6e48502684a5343
 arch=('any')
 url="https://github.com/raspberrypi/firmware"
 license=('custom')
 options=(!strip)
 source=("https://github.com/raspberrypi/firmware/archive/${_commit}.tar.gz")
-md5sums=('d3407d589999647ad1dc481dfae70549')
+md5sums=('44fc9c2aa625a8cfdfc02101bc629c4c')
 
-package_raspberrypi-bootloader() {
+package_raspberrypi-bootloader-pikvm() {
   pkgdesc="Bootloader files for Raspberry Pi"
   replaces=('raspberrypi-firmware-bootloader')
+
+  conflicts=(raspberrypi-bootloader)
+  provides=("raspberrypi-bootloader=$pkgver")
 
   mkdir -p "${pkgdir}"/boot
   cp "${srcdir}"/firmware-${_commit}/boot/{*.dat,*.bin,*.elf} "${pkgdir}"/boot
   rm "${pkgdir}"/boot/{start{_,4}x.elf,fixup{_,4}x.dat}
 }
 
-package_raspberrypi-bootloader-x() {
+package_raspberrypi-bootloader-x-pikvm() {
   pkgdesc="Bootloader with extra codecs for Raspberry Pi"
   depends=('raspberrypi-bootloader')
   replaces=('raspberrypi-firmware-bootloader-x')
+
+  conflicts=(raspberrypi-bootloader-x)
+  provides=("raspberrypi-bootloader-x=$pkgver")
 
   mkdir -p "${pkgdir}"/boot
   cp "${srcdir}"/firmware-${_commit}/boot/{start{_,4}x.elf,fixup{_,4}x.dat} "${pkgdir}"/boot

@@ -1,0 +1,16 @@
+pkgname=tailscale-pikvm
+pkgver=0.4
+pkgrel=1
+pkgdesc="Pi-KVM fixes for Tailscale"
+url="https://tailscale.com"
+license=(GPL)
+arch=(any)
+depends=("tailscale>=1.14.6")
+source=()
+md5sums=()
+install=tailscale-pikvm.install
+
+
+package() {
+	echo stub
+}
